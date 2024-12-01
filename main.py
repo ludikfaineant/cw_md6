@@ -1,5 +1,5 @@
 import sys, os
-import hashlib
+import ctypes
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -24,7 +24,49 @@ from PyQt5.QtCore import Qt
 import re
 import random
 import string
-import subprocess
+import PyPDF2
+import hashlib
+
+import fitz  # PyMuPDF
+
+
+def extract_pdf_text(file_path):
+    doc = fitz.open(file_path)  # Используем PyMuPDF для открытия PDF
+    text = ""
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        text += page.get_text("text")  # Извлекаем текст со страницы
+    return text
+
+
+class MD6Hash:
+    def __init__(self, library_path):
+        self.lib = ctypes.CDLL(library_path)
+        self.lib.MD6FromFile.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        self.lib.MD6FromFile.restype = ctypes.c_char_p
+
+        self.lib.MD6FromInput.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        self.lib.MD6FromInput.restype = ctypes.c_char_p
+
+    def compute_md6_hash_from_file(self, file_path, output_length, rounds=80):
+        return self.lib.MD6FromFile(
+            file_path, b"", ctypes.c_int(output_length), ctypes.c_int(rounds)
+        )
+
+    def compute_md6_hash_from_input(self, data, output_length, rounds=80):
+        return self.lib.MD6FromInput(
+            data, b"", ctypes.c_int(output_length), ctypes.c_int(rounds)
+        )
 
 
 class HashComparerApp(QMainWindow):
@@ -32,32 +74,23 @@ class HashComparerApp(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("MD6")
-        self.setGeometry(100, 100, 700, 550)
+        self.setGeometry(100, 100, 800, 550)
 
-        # Создание меню
         self.create_menu()
 
-        # Главный layout
-        main_layout = QVBoxLayout()
-
-        # Переключатель между режимами файла и ввода вручную
         self.use_file_content_checkbox = QCheckBox("Use File Content")
         self.use_file_content_checkbox.setChecked(False)
         self.use_file_content_checkbox.stateChanged.connect(self.toggle_input_mode)
 
-        # Переключатель для использования ключа
         self.use_key_checkbox = QCheckBox("Use Key")
         self.use_key_checkbox.setChecked(False)
         self.use_key_checkbox.stateChanged.connect(self.toggle_key_input)
 
-        # Метки и поля для ввода
         self.file_path_input = QLineEdit(self)
         self.file_path_input.setReadOnly(True)
 
         self.browse_file_button = QPushButton("Browse", self)
         self.browse_file_button.clicked.connect(self.browse_file)
-
-        # В разделе "Метки и поля для ввода" добавляем кнопку выбора файла
 
         self.file_path_label = QLabel("File Path", self)
 
@@ -67,31 +100,30 @@ class HashComparerApp(QMainWindow):
         self.computed_hash_var = QLineEdit(self)
         self.computed_hash_var.setReadOnly(True)
 
-        # Поле для ввода ключа (сначала скрыто)
         self.key_input_label = QLabel("Key Input")
         self.key_input_field = QLineEdit(self)
         self.key_input_field.setPlaceholderText("Enter key here...")
         self.key_input_field.setReadOnly(False)
 
-        # Кнопка для вычисления хеша
         self.compute_hash_button = QPushButton("Compute Hash", self)
         self.compute_hash_button.clicked.connect(self.compute_hash)
         self.compare_hash_button = QPushButton("Compare Hash", self)
         self.compare_hash_button.clicked.connect(self.compare_hash)
-        # Кнопка для генерации случайного ключа
+
         self.generate_key_button = QPushButton("Generate Key", self)
         self.generate_key_button.clicked.connect(self.generate_key)
 
-        # Размещение элементов на форме
+        self.clear_input_button = QPushButton("Clear Input", self)
+        self.clear_input_button.setFixedSize(100, 30)
+        self.clear_input_button.clicked.connect(self.clear_manual_input)
+
         file_layout = QVBoxLayout()
-        file_layout.setContentsMargins(10, 10, 10, 10)
+        file_layout.setContentsMargins(10, 10, 10, 0)
         file_layout.setSpacing(10)
 
         file_path_layout = QHBoxLayout()
         file_path_layout.addWidget(self.file_path_input)
         file_path_layout.addWidget(self.browse_file_button)
-
-        # В разделе "Метки и поля для ввода"
 
         self.file_content_label = QLabel("File Content", self)
         file_layout.addWidget(self.use_file_content_checkbox)
@@ -102,18 +134,20 @@ class HashComparerApp(QMainWindow):
         file_layout.addWidget(self.manual_input_text)
 
         hash_layout = QVBoxLayout()
-        hash_layout.setContentsMargins(10, 10, 10, 10)
+        hash_layout.setContentsMargins(10, 0, 10, 0)
         hash_layout.setSpacing(10)
+        clear_layout = QHBoxLayout()
+        clear_layout.addWidget(self.use_key_checkbox)
+        clear_layout.addWidget(self.clear_input_button, alignment=Qt.AlignRight)
 
-        hash_layout.addWidget(self.use_key_checkbox)
-        hash_layout.addWidget(self.key_input_label)  # Добавляем метку для ввода ключа
+        hash_layout.addLayout(clear_layout)
+        hash_layout.addWidget(self.key_input_label)
 
-        # Горизонтальный layout для поля ввода ключа и кнопки генерации ключа
         key_layout = QHBoxLayout()
         key_layout.addWidget(self.key_input_field)
         key_layout.addWidget(self.generate_key_button)
 
-        hash_layout.addLayout(key_layout)  # Добавляем горизонтальный layout
+        hash_layout.addLayout(key_layout)
         hash_layout.addWidget(QLabel("Computed Hash"))
 
         compute_hash = QHBoxLayout()
@@ -129,7 +163,7 @@ class HashComparerApp(QMainWindow):
         # Скомпоновка всех layout'ов
         central_widget = QWidget(self)
         central_layout = QVBoxLayout(central_widget)
-        central_layout.setContentsMargins(10, 10, 10, 10)
+        central_layout.setContentsMargins(10, 0, 10, 10)
         central_layout.setSpacing(15)
 
         central_layout.addLayout(file_layout)
@@ -145,6 +179,23 @@ class HashComparerApp(QMainWindow):
 
         self.toggle_input_mode()
         self.toggle_key_input()
+
+        # Загрузка DLL
+        # self.md6_hash_lib = ctypes.CDLL("./md6hash.dll")
+
+        # self.md6_hash_lib = ctypes.CDLL("./libmd6.so")
+        # Определяем типы данных для функции из DLL
+        # self.md6_hash_lib.compute_md6_hash.argtypes = [
+        #    ctypes.c_char_p,
+        #    ctypes.c_char_p,
+        #    ctypes.c_int,
+        # ]
+
+        # self.md6_hash_lib.compute_md6_hash.restype = ctypes.c_char_p
+
+    def clear_manual_input(self):
+        """Очистить поле ручного ввода."""
+        self.manual_input_text.clear()
 
     def create_menu(self):
         """Создание меню."""
@@ -202,113 +253,6 @@ class HashComparerApp(QMainWindow):
             self.key_input_field.setVisible(False)
             self.generate_key_button.setVisible(False)
 
-    def compute_hash(self):
-        """Вычислить хеш на основе контента и выбранного ключа."""
-        content = self.manual_input_text.toPlainText().strip()
-
-        if not content:
-            QMessageBox.critical(
-                self, "Input Error", "Please enter some content to compute the hash."
-            )
-            return
-
-        key = (
-            self.key_input_field.text().strip()
-            if self.use_key_checkbox.isChecked()
-            else ""
-        )
-
-        if self.use_key_checkbox.isChecked() and not self.is_key_valid(key):
-            QMessageBox.critical(
-                self,
-                "Invalid Key",
-                f"Key must be between {self.key_min_length} and {self.key_max_length} characters and match the allowed pattern.\n"
-                "Allowed characters: lowercase letters (a-z), uppercase letters (A-Z), and digits (0-9).",
-            )
-            return
-
-        # Смешиваем контент и ключ
-        combined_content = content + key
-
-        try:
-            # Важно передавать правильный формат (строка в Go, не байты)
-            process = subprocess.Popen(
-                ["./md6hash"],  # Пусть к Go-программе
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,  # Это важно, чтобы передавать строки
-            )
-
-            # Передаем строку в Go-программу
-            stdout, stderr = process.communicate(input=combined_content)
-
-            if process.returncode != 0:
-                print(f"Error output: {stderr}")  # Печать ошибки
-                QMessageBox.critical(
-                    self, "Error", f"Failed to compute MD6 hash:\n{stderr}"
-                )
-                return
-            computed_hash = stdout.strip()
-            self.computed_hash_var.setText(computed_hash)
-        except Exception as e:
-            print(f"Exception: {e}")  # Печать исключений
-            QMessageBox.critical(
-                self, "Error", f"An unexpected error occurred:\n{str(e)}"
-            )
-
-    def compare_hash(self):
-        """Сравнить вычисленный хэш с загруженным."""
-        computed_hash = self.computed_hash_var.text().strip()
-        content = self.manual_input_text.toPlainText().strip()
-
-        if not content:
-            QMessageBox.critical(self, "Error", "No content to compute hash from.")
-            return
-
-        if not computed_hash:
-            QMessageBox.warning(self, "Warning", "No hash loaded or computed.")
-            return
-
-        key = (
-            self.key_input_field.text().strip()
-            if self.use_key_checkbox.isChecked()
-            else ""
-        )
-
-        # Смешиваем контент и ключ для вычисления
-        combined_content = content + key
-        try:
-            # Важно передавать правильный формат (строка в Go, не байты)
-            process = subprocess.Popen(
-                ["./md6hash"],  # Пусть к Go-программе
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,  # Это важно, чтобы передавать строки
-            )
-
-            # Передаем строку в Go-программу
-            stdout, stderr = process.communicate(input=combined_content)
-
-            if process.returncode != 0:
-                print(f"Error output: {stderr}")  # Печать ошибки
-                QMessageBox.critical(
-                    self, "Error", f"Failed to compute MD6 hash:\n{stderr}"
-                )
-                return
-            hash = stdout.strip()
-            self.computed_hash_var.setText(computed_hash)
-        except Exception as e:
-            print(f"Exception: {e}")  # Печать исключений
-            QMessageBox.critical(
-                self, "Error", f"An unexpected error occurred:\n{str(e)}"
-            )
-        if hash == computed_hash:
-            QMessageBox.information(self, "Comparison Result", "Hashes match!")
-        else:
-            QMessageBox.warning(self, "Comparison Result", "Hashes do not match!")
-
     def is_key_valid(self, key):
         """Проверка валидности ключа по длине и разрешённым символам."""
         if len(key) < self.key_min_length or len(key) > self.key_max_length:
@@ -322,24 +266,6 @@ class HashComparerApp(QMainWindow):
             random.choice(characters) for _ in range(self.key_max_length)
         )
         self.key_input_field.setText(random_key)
-
-    def browse_file(self):
-        """Открыть файл и отобразить его содержимое."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open File", "", "Text Files (*.txt);;All Files (*)"
-        )
-        if file_path:
-            try:
-                with open(
-                    file_path, "r"
-                ) as file:  # Используйте "r" для чтения в текстовом режиме
-                    content = file.read()
-                    self.manual_input_text.setText(
-                        content
-                    )  # Отображаем в текстовом поле
-                    self.file_path_input.setText(file_path)  # Устанавливаем путь
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to read file: {e}")
 
     def load_hash(self):
         """Загрузить хэш из файла."""
@@ -370,31 +296,130 @@ class HashComparerApp(QMainWindow):
         if file_path:
             with open(file_path, "w") as file:
                 file.write(self.computed_hash_var.text())
+            QMessageBox.information(self, "Success", "Hash saved successfully.")
 
-    def show_about(self):
-        """Показать информацию о приложении."""
-        QMessageBox.about(
-            self,
-            "About",
-            """Автор: Ларин Анатолий А-18-21
+    def browse_file(self):
+        """Выбрать файл и отобразить его содержимое, если файл в UTF-8 или PDF."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Open File", "", "All Files (*)"
+        )
+        if not file_path:
+            return  # Если файл не выбран, выходим из функции
 
-            Приложение для вычисления хэша файлов с использованием алгоритма MD6.
-            Данное приложение предоставляет возможности:
-            - Вводить данные вручную или загружать файлы для вычисления хэша
-            - Сравнивать хэш с загруженным файлом хэша
-            - Сохранять и загружать хэши для дальнейшей проверки
-            
-            Используемые алгоритмы:
-            - Алгоритм MD6 (реализован с использованием функции сжатия SHA-256)
-            """,
+        self.file_path_input.setText(file_path)
+
+        try:
+            if file_path.lower().endswith(".pdf"):
+                # Обработка PDF файлов
+                text = extract_pdf_text(file_path)
+                self.manual_input_text.setText(
+                    text if text else "No text found in PDF."
+                )
+            else:
+                # Обработка текстовых файлов
+                with open(file_path, "rb") as f:
+                    file_content = f.read()
+                    try:
+                        decoded_content = file_content.decode("utf-8")
+                        self.manual_input_text.setText(decoded_content)
+                    except UnicodeDecodeError:
+                        self.manual_input_text.setText(
+                            "The file cannot be decoded as UTF-8."
+                        )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Error", f"An error occurred while reading the file:\n{e}"
+            )
+
+    def compute_md6_hash(self, data, key, output_length, rounds=10):
+        return self.lib.MD6(
+            ctypes.c_char_p(data),
+            ctypes.c_char_p(key),
+            ctypes.c_int(output_length),
+            ctypes.c_int(rounds),
         )
 
+    # Использование
+
+    def compute_hash(self):
+        """Вычислить хэш с использованием файла или ручного ввода."""
+        try:
+            if self.use_file_content_checkbox.isChecked():
+                file_path = self.file_path_input.text().strip()
+                if not os.path.exists(file_path):
+                    QMessageBox.critical(self, "Error", "File not found!")
+                    return
+
+                md6 = MD6Hash("./libmd6.so")
+                result = md6.compute_md6_hash_from_file(file_path.encode("utf-8"), 32)
+            else:
+                data = self.manual_input_text.toPlainText().encode("utf-8")
+                if not data:
+                    QMessageBox.warning(self, "Warning", "Input is empty!")
+                    return
+
+                md6 = MD6Hash("./libmd6.so")
+                result = md6.compute_md6_hash_from_input(data, 32)
+
+            if result:
+                self.computed_hash_var.setText(result.decode())
+            else:
+                QMessageBox.warning(
+                    self, "Warning", "Hash computation returned no result."
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred:\n{e}")
+
+    def compare_hash(self):
+        """Сравнить ранее вычисленный хэш с текущим."""
+        try:
+            # Получаем данные для хэширования
+            if self.use_file_content_checkbox.isChecked():
+                file_path = self.file_path_input.text().strip()
+                if not os.path.exists(file_path):
+                    QMessageBox.critical(self, "Error", "File not found!")
+                    return
+
+                md6 = MD6Hash("./libmd6.so")
+                result = md6.compute_md6_hash_from_file(file_path.encode("utf-8"), 32)
+            else:
+                data = self.manual_input_text.toPlainText().encode("utf-8")
+                if not data:
+                    QMessageBox.warning(self, "Warning", "Input is empty!")
+                    return
+
+                md6 = MD6Hash("./libmd6.so")
+                result = md6.compute_md6_hash_from_input(data, 32)
+
+            # Получаем ключ, если требуется
+            key = (
+                self.key_input_field.text().encode("utf-8")
+                if self.use_key_checkbox.isChecked()
+                else b""
+            )
+
+            # Сравниваем полученный хэш с сохраненным
+            if result.decode("utf-8") == self.computed_hash_var.text().strip():
+                QMessageBox.information(self, "Match", "Hashes match!")
+            else:
+                QMessageBox.warning(self, "Mismatch", "Hashes do not match.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred:\n{e}")
+
     def quit(self):
-        """Закрыть приложение."""
+        """Выход из программы."""
         QApplication.quit()
 
+    def show_about(self):
+        """Окно информации о программе."""
+        QMessageBox.information(
+            self,
+            "About",
+            "MD6 Hash Comparer\n\nA simple tool to compare MD6 hashes of files.",
+        )
 
-# Run the application
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = HashComparerApp()

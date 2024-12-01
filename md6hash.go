@@ -1,96 +1,60 @@
 package main
 
+/*
+#include <stdint.h>
+#include <stdlib.h>
+*/
+import "C"
+
 import (
-	"bufio"
 	"encoding/binary"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"math/bits"
 	"os"
-	"sync"
 )
 
-// MD6BlockSize — размер блока MD6 (512 бит или 64 байта)
-const MD6BlockSize = 64
-const MD6HashSize = 32 // Длина итогового хэша (256 бит)
+// Константы
+const MD6BlockSize = 64 // Размер блока 512 бит (64 байта)
+const MD6HashSize = 32  // Размер хэша 256 бит
 
-var (
-	outputLength int
-	rounds       int
-	key          string
-)
-
-// MD6 вычисляет хэш с использованием параллельной обработки блоков.
-func MD6(data []byte, key []byte, outputLength int, rounds int) string {
-
-	// Разделяем данные на блоки
-	blocks := splitIntoBlocks(data, MD6BlockSize)
-
-	// Канал для сбора промежуточных хэшей
-	hashResults := make(chan []byte, len(blocks))
-
-	// Используем WaitGroup для синхронизации горутин
-	var wg sync.WaitGroup
-
-	// Параллельная обработка блоков
-	for i, block := range blocks {
-		wg.Add(1)
-		go func(blockIndex int, blockData []byte) {
-			defer wg.Done()
-			// Сжимаем блок с использованием собственной функции сжатия
-			hash := compressF(blockData, string(key), rounds)
-			hashResults <- hash[:]
-		}(i, block)
-	}
-
-	// Закрываем канал после завершения всех горутин
-	go func() {
-		wg.Wait()
-		close(hashResults)
-	}()
-
-	// Сбор промежуточных хэшей
-	var intermediateHashes []byte
-	for hash := range hashResults {
-		intermediateHashes = append(intermediateHashes, hash...)
-	}
-
-	// Финальная компрессия для получения корневого хэша
-	finalHash := compressF(intermediateHashes, string(key), rounds)
-
-	// Обрезаем до нужной длины
-	if outputLength > len(finalHash) {
-		outputLength = len(finalHash)
-	}
-	return hex.EncodeToString(finalHash[:outputLength])
-}
-
-// splitIntoBlocks разбивает данные на блоки заданного размера.
+// Разбивает данные на блоки фиксированного размера с добавлением padding и длины сообщения
 func splitIntoBlocks(data []byte, blockSize int) [][]byte {
+	length := len(data)
+	paddingSize := blockSize - (length % blockSize)
+	if paddingSize < 8 {
+		paddingSize += blockSize
+	}
+
+	padding := make([]byte, paddingSize-8) // Padding 0x80 и нули
+	padding[0] = 0x80
+
+	// Добавляем длину данных (64-битное целое в битах)
+	lenBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(lenBytes, uint64(length*8)) // длина в битах
+
+	// Объединяем данные, padding и длину
+	data = append(data, padding...)
+	data = append(data, lenBytes...)
+
+	// Разбиваем на блоки
 	var blocks [][]byte
 	for len(data) > 0 {
-		if len(data) > blockSize {
-			blocks = append(blocks, data[:blockSize])
-			data = data[blockSize:]
-		} else {
-			// Дополняем последний блок до размера blockSize
-			padding := make([]byte, blockSize-len(data))
-			blocks = append(blocks, append(data, padding...))
-			break
-		}
+		blocks = append(blocks, data[:blockSize])
+		data = data[blockSize:]
 	}
 	return blocks
 }
 
+// Функция сжатия для блока данных
 func compressF(block []byte, key string, rounds int) []byte {
 	state := make([]uint64, 16)
-
 	if len(block) < 64 {
-		block = append(block, make([]byte, 64-len(block))...) // Заполнение блока нулями
+		block = append(block, make([]byte, 64-len(block))...)
 	}
 
+	// Загружаем блок в начальное состояние
 	for i := 0; i < len(state); i++ {
 		if len(block) >= (i+1)*8 {
 			state[i] = binary.LittleEndian.Uint64(block[i*8 : (i+1)*8])
@@ -99,6 +63,7 @@ func compressF(block []byte, key string, rounds int) []byte {
 		}
 	}
 
+	// Если ключ не пустой, добавляем его
 	if len(key) > 0 {
 		for i := 0; i < len(state); i++ {
 			if len(key) >= (i+1)*8 {
@@ -107,48 +72,124 @@ func compressF(block []byte, key string, rounds int) []byte {
 		}
 	}
 
+	// Раунды сжатия
 	for round := 0; round < rounds; round++ {
+		temp := make([]uint64, 16)
 		for i := 0; i < len(state); i++ {
 			a := state[i]
 			b := state[(i+1)%16]
 			c := state[(i+2)%16]
 			d := state[(i+3)%16]
-			state[i] = bits.RotateLeft64(a^b, int(c%64)) + (c & d)
+
+			// Более сложные нелинейные операции
+			temp[i] = bits.RotateLeft64(a^b, int(c%64)) +
+				(c ^ d) ^
+				(bits.RotateLeft64(d, int(b%64)))
 		}
+		// Дополнительное перемешивание
+		mixState(temp)
+		copy(state, temp)
 	}
 
+	// Формируем выходное состояние
 	output := make([]byte, 128)
 	for i := 0; i < len(state); i++ {
 		binary.LittleEndian.PutUint64(output[i*8:], state[i])
 	}
 
-	return output
+	return output[:MD6HashSize] // Ограничиваем результат до 256 бит
+}
+func mixState(state []uint64) {
+	for i := range state {
+		state[i] ^= bits.RotateLeft64(state[(i+1)%16], int(state[(i+2)%16]%64))
+	}
 }
 
-func main() {
-	// Обработка параметров командной строки
-	flag.IntVar(&outputLength, "outputLength", 16, "Length of the hash in bytes (e.g., 16, 32)")
-	flag.IntVar(&rounds, "rounds", 80, "Number of rounds for the MD6 algorithm")
-	flag.StringVar(&key, "key", "", "Key to be used for hashing")
-	flag.Parse()
+func mixBytes(data []byte) []byte {
+	for i := 0; i < len(data); i++ {
+		data[i] ^= byte((i * 31) % 256)
+	}
+	return data
+}
 
-	// Чтение всех данных из stdin
-	reader := bufio.NewReader(os.Stdin)
-	var data []byte
-	for {
-		line, err := reader.ReadBytes('\n') // Чтение до конца строки
-		data = append(data, line...)        // Добавляем строку в общий ввод
-
-		if err == io.EOF {
-			break // Прекращаем, если достигнут конец ввода
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-			os.Exit(1)
-		}
+// Построение дерева сжатия
+func buildTree(blocks [][]byte, key string, rounds int) []byte {
+	hashes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		hashes[i] = compressF(block, key, rounds)
 	}
 
-	// Вычисляем MD6
-	hash := MD6(data, []byte(key), outputLength, rounds)
-	fmt.Printf("%s\n", hash) // Выводим хэш в stdout
+	for len(hashes) > 1 {
+		var newHashes [][]byte
+		for i := 0; i < len(hashes); i += 2 {
+			if i+1 < len(hashes) {
+				combined := append(hashes[i], hashes[i+1]...)
+				mixedCombined := mixBytes(combined) // Дополнительное перемешивание
+				newHashes = append(newHashes, compressF(mixedCombined, key, rounds))
+			} else {
+				newHashes = append(newHashes, hashes[i])
+			}
+		}
+		hashes = newHashes
+	}
+	return hashes[0]
 }
+
+// MD6 для данных из файла
+//
+//export MD6FromFile
+func MD6FromFile(filePath *C.char, key *C.char, outputLength C.int, rounds C.int) *C.char {
+	goKey := C.GoString(key)
+	goFilePath := C.GoString(filePath)
+
+	// Читаем данные из файла
+	file, err := os.Open(goFilePath)
+	if err != nil {
+		fmt.Println("Ошибка открытия файла:", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		fmt.Println("Ошибка чтения файла:", err)
+		os.Exit(1)
+	}
+
+	// Разбиваем данные на блоки
+	blocks := splitIntoBlocks(data, MD6BlockSize)
+
+	// Строим дерево сжатия
+	finalHash := buildTree(blocks, goKey, int(rounds))
+
+	// Урезаем финальный хэш до нужной длины
+	if int(outputLength) > len(finalHash) {
+		outputLength = C.int(len(finalHash))
+	}
+	hash := hex.EncodeToString(finalHash[:outputLength])
+	return C.CString(hash)
+}
+
+// MD6 для данных из строки
+//
+//export MD6FromInput
+func MD6FromInput(inputData *C.char, key *C.char, outputLength C.int, rounds C.int) *C.char {
+	goKey := C.GoString(key)
+	goInputData := C.GoString(inputData)
+
+	// Преобразуем строку в байты и разбиваем на блоки
+	data := []byte(goInputData)
+	blocks := splitIntoBlocks(data, MD6BlockSize)
+
+	// Строим дерево сжатия
+	finalHash := buildTree(blocks, goKey, int(rounds))
+
+	// Урезаем финальный хэш до нужной длины
+	if int(outputLength) > len(finalHash) {
+		outputLength = C.int(len(finalHash))
+	}
+	hash := hex.EncodeToString(finalHash[:outputLength])
+	return C.CString(hash)
+}
+
+func main() {}

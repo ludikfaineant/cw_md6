@@ -1,4 +1,7 @@
-*.txt
-test.py
-md6hash
-/_*
+*
+
+
+
+!.gitignore
+!main.py
+!md6hash.go
