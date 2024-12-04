@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import (
     QWidget,
     QMenu,
     QAction,
+    QDialog,
+    QFormLayout,
 )
 from PyQt5.QtCore import Qt
 import re
@@ -62,6 +64,77 @@ class MD6Hash:
             ctypes.c_char_p(key),
             ctypes.c_int(output_length),
         )
+
+
+class KeySettingsDialog(QDialog):
+    def __init__(
+        self,
+        parent=None,
+        key_min_length=8,
+        exclude_digits=False,
+        exclude_lower=False,
+        exclude_upper=False,
+        exclude_special=False,
+    ):
+        super().__init__(parent)
+
+        self.setWindowTitle("Key Settings")
+        self.setGeometry(300, 300, 400, 250)
+
+        self.key_min_length_input = QLineEdit(str(key_min_length))
+
+        # Чекбоксы для исключения каждого типа символа
+        self.exclude_digits_checkbox = QCheckBox("Exclude Digits", self)
+        self.exclude_digits_checkbox.setChecked(exclude_digits)
+        self.exclude_lower_checkbox = QCheckBox("Exclude Lowercase Letters", self)
+        self.exclude_lower_checkbox.setChecked(exclude_lower)
+        self.exclude_upper_checkbox = QCheckBox("Exclude Uppercase Letters", self)
+        self.exclude_upper_checkbox.setChecked(exclude_upper)
+        self.exclude_special_checkbox = QCheckBox("Exclude Special Characters", self)
+        self.exclude_special_checkbox.setChecked(exclude_special)
+
+        self.save_button = QPushButton("Save", self)
+        self.cancel_button = QPushButton("Cancel", self)
+
+        self.save_button.clicked.connect(self.save_settings)
+        self.cancel_button.clicked.connect(self.reject)
+
+        form_layout = QFormLayout(self)
+        form_layout.addRow("Min Length:", self.key_min_length_input)
+        form_layout.addRow(self.exclude_digits_checkbox)
+        form_layout.addRow(self.exclude_lower_checkbox)
+        form_layout.addRow(self.exclude_upper_checkbox)
+        form_layout.addRow(self.exclude_special_checkbox)
+        form_layout.addRow(self.save_button, self.cancel_button)
+
+    def save_settings(self):
+        try:
+            min_length = int(self.key_min_length_input.text())
+            exclude_digits = self.exclude_digits_checkbox.isChecked()
+            exclude_lower = self.exclude_lower_checkbox.isChecked()
+            exclude_upper = self.exclude_upper_checkbox.isChecked()
+            exclude_special = self.exclude_special_checkbox.isChecked()
+
+            # Если все условия исключены, показываем ошибку
+            if exclude_digits and exclude_lower and exclude_upper and exclude_special:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Settings",
+                    "At least one type of symbol must be included in the key (e.g., digits, lowercase, uppercase, special characters).",
+                )
+                return
+
+            self.parent().update_key_settings(
+                min_length,
+                exclude_digits,
+                exclude_lower,
+                exclude_upper,
+                exclude_special,
+            )
+            self.accept()
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid Input", f"Error: {e}")
 
 
 class HashComparerApp(QMainWindow):
@@ -166,16 +239,15 @@ class HashComparerApp(QMainWindow):
 
         self.setCentralWidget(central_widget)
 
+        # Изначальные значения
         self.key_min_length = 8
-        self.key_max_length = 64
-        self.key_allowed_characters = r"^[a-zA-Z0-9#!@$]*$"
+        self.exclude_digits = False
+        self.exclude_lower = False
+        self.exclude_upper = False
+        self.exclude_special = False
 
         self.toggle_input_mode()
         self.toggle_key_input()
-
-    def clear_manual_input(self):
-        """Очистить поле ручного ввода."""
-        self.manual_input_text.clear()
 
     def create_menu(self):
         """Создание меню."""
@@ -192,6 +264,11 @@ class HashComparerApp(QMainWindow):
         save_hash_action.triggered.connect(self.save_hash)
         file_menu.addAction(save_hash_action)
 
+        option = QMenu("Options", self)
+        menu_bar.addMenu(option)
+        settings_action = QAction("Set KeyWord restriction", self)
+        settings_action.triggered.connect(self.open_key_settings)
+        option.addAction(settings_action)
         quit_action = QAction("Exit", self)
         quit_action.triggered.connect(self.quit)
         file_menu.addAction(quit_action)
@@ -202,6 +279,88 @@ class HashComparerApp(QMainWindow):
         about_action = QAction("About", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
+
+    def open_key_settings(self):
+        """Открыть окно настроек ключа."""
+        dialog = KeySettingsDialog(
+            self,
+            self.key_min_length,
+            self.exclude_digits,  # Заменено require_digits на exclude_digits
+            self.exclude_lower,  # Заменено require_lower на exclude_lower
+            self.exclude_upper,  # Заменено require_upper на exclude_upper
+            self.exclude_special,  # Заменено require_special на exclude_special
+        )
+        dialog.exec_()
+
+    def update_key_settings(
+        self, min_length, exclude_digits, exclude_lower, exclude_upper, exclude_special
+    ):
+        """Обновить настройки ключа."""
+        self.key_min_length = min_length
+        self.exclude_digits = exclude_digits
+        self.exclude_lower = exclude_lower
+        self.exclude_upper = exclude_upper
+        self.exclude_special = exclude_special
+
+    def is_key_valid(self, key):
+        """Проверка валидности ключа по установленным ограничениям."""
+
+        # Проверка минимальной длины
+        if len(key) < self.key_min_length and len(key) > 64:
+            return False
+
+        # Проверка, если исключены цифры, то они не могут быть в ключе
+        if self.exclude_digits and any(c.isdigit() for c in key):
+            return False
+
+        # Проверка, если исключены маленькие буквы, то их не может быть в ключе
+        if self.exclude_lower and any(c.islower() for c in key):
+            return False
+
+        # Проверка, если исключены большие буквы, то их не может быть в ключе
+        if self.exclude_upper and any(c.isupper() for c in key):
+            return False
+
+        # Проверка, если исключены специальные символы, то их не может быть в ключе
+        if self.exclude_special and any(c in "#!@$" for c in key):
+            return False
+
+        return True
+
+    def generate_key(self):
+        """Генерация случайного ключа, соответствующего ограничениям."""
+
+        # Стартовый набор символов (включает все символы)
+        characters = string.ascii_letters + string.digits + "#!@$"
+
+        # Исключаем символы в зависимости от флагов
+        if self.exclude_digits:
+            characters = "".join([ch for ch in characters if not ch.isdigit()])
+        if self.exclude_lower:
+            characters = "".join([ch for ch in characters if not ch.islower()])
+        if self.exclude_upper:
+            characters = "".join([ch for ch in characters if not ch.isupper()])
+        if self.exclude_special:
+            characters = "".join([ch for ch in characters if ch not in "#!@$"])
+
+        # Если после исключений пустой набор символов, то выводим ошибку
+        if not characters:
+            QMessageBox.warning(
+                self,
+                "Invalid Settings",
+                "No valid characters left for key generation. Please adjust your settings.",
+            )
+            return
+
+        # Генерация ключа, который будет соответствовать всем ограничениям
+        while True:
+            random_key = "".join(random.choice(characters) for _ in range(64))
+
+            # Проверяем, соответствует ли ключ всем ограничениям
+            if self.is_key_valid(random_key):
+                break
+
+        self.key_input_field.setText(random_key)
 
     def toggle_input_mode(self):
         """Переключение между режимами файла и ввода вручную."""
@@ -232,20 +391,6 @@ class HashComparerApp(QMainWindow):
             self.key_input_label.setVisible(False)
             self.key_input_field.setVisible(False)
             self.generate_key_button.setVisible(False)
-
-    def is_key_valid(self, key):
-        """Проверка валидности ключа по длине и разрешённым символам."""
-        if len(key) < self.key_min_length or len(key) > self.key_max_length:
-            return False
-        return bool(re.match(self.key_allowed_characters, key))
-
-    def generate_key(self):
-        """Генерация случайного ключа, соответствующего ограничениям."""
-        characters = string.ascii_letters + string.digits + "#!@$"
-        random_key = "".join(
-            random.choice(characters) for _ in range(self.key_max_length)
-        )
-        self.key_input_field.setText(random_key)
 
     def load_hash(self):
         """Загрузить хэш из файла."""
@@ -405,6 +550,10 @@ class HashComparerApp(QMainWindow):
             "About",
             "MD6 Hash Comparer\n\nA simple tool to compare MD6 hashes of files.",
         )
+
+    def clear_manual_input(self):
+        """Очистить поле ручного ввода."""
+        self.manual_input_text.clear()
 
 
 if __name__ == "__main__":

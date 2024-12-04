@@ -5,11 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math"
 	_ "net/http/pprof" // Пакет для профилирования
-	"os"
-	"runtime/pprof"
+	"sync"
 )
 
 import "C"
@@ -92,67 +90,52 @@ func rotateLeft(value uint64, shift uint) uint64 {
 	return (value << shift) | (value >> (64 - shift))
 }
 
-func generateSi(round int) uint64 {
-	Sj := S0
-	for j := 0; j <= round; j++ {
-		// Применяем в коде:
-		Sj = rotateLeft(Sj, 1) ^ (Sj & S_star)
-	}
-	return Sj
-}
-
 func compressF(block []byte, key string, rounds int) []byte {
-	n := 89
-	c := 16
-	t_cycle := rounds * 16
-	A := make([]uint64, 89+t_cycle)
-	for i := 0; i < len(Q); i++ {
-		A[i] = Q[i]
-	}
+	n := 89                // Количество фиксированных слов
+	c := 16                // Размер блока вывода
+	t_cycle := rounds * 16 // Количество циклов
 
-	// Заполнение A значениями из ключа K
+	// Массив A для хранения всех данных: Q, K, U, V и блок
+	A := make([]uint64, 89+t_cycle)
+
+	// 1. Заполнение первых 89 элементов массива A значениями из Q
+	copy(A[:len(Q)], Q)
+
+	// 2. Заполнение A значениями из ключа K
 	K := make([]uint64, len(key)/8)
 	for i := 0; i < len(K); i++ {
 		K[i] = binary.LittleEndian.Uint64([]byte(key)[i*8 : (i+1)*8])
 	}
+	copy(A[len(Q):len(Q)+len(K)], K)
 
-	for i := 0; i < len(K); i++ {
-		A[len(Q)+i] = K[i]
-	}
-
+	// 3. Заполнение значениями U и V
 	A[len(Q)+len(K)] = U
 	A[len(Q)+len(K)+1] = V
 
+	// 4. Заполнение A значениями из блока
 	blockWords := len(block) / 8
 	for i := 0; i < blockWords; i++ {
 		A[len(Q)+len(K)+2+i] = binary.LittleEndian.Uint64(block[i*8 : (i+1)*8])
 	}
 
+	// 5. Добавление паддинга, если блок меньше 74 слов
 	if blockWords < 74 {
-		padding := make([]byte, (74-blockWords)*8)
-		for i := 0; i < len(padding); i++ {
-			padding[i] = 0x00
-		}
-		for i := 0; i < (74 - blockWords); i++ {
-			A[len(Q)+len(K)+2+blockWords+i] = binary.LittleEndian.Uint64(padding[i*8 : (i+1)*8])
-		}
+		padding := make([]uint64, 74-blockWords) // Создаем массив паддинга
+		// Паддинг заполняем нулями (по умолчанию)
+		copy(A[len(Q)+len(K)+2+blockWords:], padding) // Копируем паддинг в A
 	}
 
-	Si := make([]uint64, rounds)
-	for i := 0; i < rounds; i++ {
-		Si[i] = generateSi(i)
-	}
-
+	// 6. Основной цикл вычислений
 	for i := n; i < t_cycle; i++ {
 		siIndex := (i - n) % 16
-		x := SiCache[siIndex] ^ A[i-n] ^ A[i-t[0]]
-		x ^= (A[i-t[1]] & A[i-t[2]]) ^ (A[i-t[3]] & A[i-t[4]])
+		x := (SiCache[siIndex] ^ A[i-n] ^ A[i-t[0]]) ^ (A[i-t[1]] & A[i-t[2]]) ^ (A[i-t[3]] & A[i-t[4]])
 		x ^= x >> uint(r[(i-n)%16])
 		x ^= x << uint(shifts[(i-n)%16])
 
 		A[i] = x
 	}
 
+	// 7. Подготовка вывода
 	startIndex := t_cycle - 16
 	output := make([]byte, c*8)
 	for i := 0; i < c; i++ {
@@ -163,39 +146,51 @@ func compressF(block []byte, key string, rounds int) []byte {
 	return output
 }
 
-// Функция для обработки блоков
 func buildTree(blocks [][]byte, key string, rounds int) []byte {
-	// Массив для хранения хэшей блоков
 	hashes := make([][]byte, len(blocks))
+	var wg sync.WaitGroup
 
-	// Последовательная обработка блоков
+	// Параллельная обработка блоков
 	for i, block := range blocks {
-		hash := compressF(block, key, rounds)
-		hashes[i] = hash // Записываем хеш в массив
+		wg.Add(1)
+		go func(i int, block []byte) {
+			defer wg.Done()
+			hashes[i] = compressF(block, key, rounds) // Прямое назначение в массив по индексу
+		}(i, block)
 	}
 
-	// Объединение хешей в дереве
-	for len(hashes) > 1 {
-		var newHashes [][]byte
+	wg.Wait() // Ждём завершения всех горутин
 
-		// Обрабатываем все блоки попарно
+	// Объединение хэшей
+	for len(hashes) > 1 {
+		// Новый срез для хранения объединённых хэшей
+		newHashes := make([][]byte, (len(hashes)+1)/2)
+
+		var subWG sync.WaitGroup
 		for i := 0; i < len(hashes); i += 2 {
-			if i+1 < len(hashes) {
-				combined := append(hashes[i], hashes[i+1]...)
-				newHash := compressF(combined, key, rounds)
-				newHashes = append(newHashes, newHash)
-			} else {
-				// Если нечетное количество блоков, копируем последний
-				newHashes = append(newHashes, hashes[i])
-			}
+			subWG.Add(1)
+			go func(i int) {
+				defer subWG.Done()
+
+				// Объединяем текущий и следующий блоки
+				var combined []byte
+				if i+1 < len(hashes) {
+					combined = append(hashes[i], hashes[i+1]...)
+				} else {
+					combined = hashes[i] // Последний блок без пары
+				}
+
+				// Хешируем объединённый блок
+				newHashes[i/2] = compressF(combined, key, rounds)
+			}(i)
 		}
 
-		// Переназначаем hashes на новые объединенные хеши
+		subWG.Wait() // Ждём завершения всех горутин
+
+		// Переходим на новый уровень
 		hashes = newHashes
 	}
 
-	// Логирование финального хэша
-	fmt.Printf("Final hash: %x\n", hashes[0])
 	return hashes[0]
 }
 
@@ -203,59 +198,6 @@ func buildTree(blocks [][]byte, key string, rounds int) []byte {
 //
 //export MD6FromFile
 func MD6FromFile(filePath *C.char, key *C.char, outputLength C.int) *C.char {
-	// Запускаем профилирование CPU перед выполнением основного кода
-	startCPUProfile()
-
-	goFilePath := C.GoString(filePath)
-	goKey := C.GoString(key)
-	rounds := 40 + int(math.Floor(float64(outputLength*16)/4))
-
-	// Чтение файла
-	data, err := ioutil.ReadFile(goFilePath)
-	if err != nil {
-		fmt.Println("Ошибка чтения файла:", err)
-		stopCPUProfile() // Завершаем профилирование
-		return nil
-	}
-
-	// Разбивка на блоки
-	blocks := splitIntoBlocks(data, MD6BlockSize)
-
-	// Основной хеширующий процесс
-	finalHash := buildTree(blocks, goKey, rounds)
-
-	// Обработка длины хеша
-	if int(outputLength) > len(finalHash) {
-		outputLength = C.int(len(finalHash))
-	}
-	hash := hex.EncodeToString(finalHash[:outputLength])
-
-	// Завершаем профилирование перед возвратом
-	stopCPUProfile()
-
-	return C.CString(hash)
-}
-
-// Функция для профилирования
-func startCPUProfile() {
-	f, err := os.Create("cpu_profile.prof")
-	if err != nil {
-		log.Fatal("Ошибка при создании профиля: ", err)
-	}
-	pprof.StartCPUProfile(f)
-	fmt.Println("Профилирование CPU начато...")
-}
-
-func stopCPUProfile() {
-	pprof.StopCPUProfile()
-	fmt.Println("Профилирование CPU завершено...")
-}
-
-/*
-// MD6 для данных из файла
-//
-//export MD6FromFile
-func MD6FromFile(filePath *C.char, key *C.char, outputLength C.int) *C.char {
 	goFilePath := C.GoString(filePath)
 	goKey := C.GoString(key)
 	rounds := 40 + int(math.Floor(float64(outputLength*16)/4))
@@ -275,7 +217,7 @@ func MD6FromFile(filePath *C.char, key *C.char, outputLength C.int) *C.char {
 	hash := hex.EncodeToString(finalHash[:outputLength])
 	return C.CString(hash)
 }
-*/
+
 //export MD6FromInput
 func MD6FromInput(inputData *C.char, key *C.char, outputLength C.int) *C.char {
 	goInputData := C.GoString(inputData)
