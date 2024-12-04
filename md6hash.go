@@ -13,7 +13,7 @@ import (
 import "C"
 
 // Константы для MD6
-const MD6BlockSize = 64 // Размер блока (512 бит, 64 байта)
+const MD6BlockSize = 512
 
 // Константы для MD6
 var (
@@ -64,7 +64,7 @@ func precomputeSi(rounds int) {
 
 // Функция разбивки на блоки с дополнительным логированием
 func splitIntoBlocks(data []byte, blockSize int) [][]byte {
-	precomputeSi(40 + int(math.Floor(float64(MD6BlockSize*8)/4)))
+	precomputeSi(40 + int(math.Floor(float64(32*16)/4)))
 	length := len(data)
 	paddingSize := blockSize - (length % blockSize)
 	if paddingSize < 8 {
@@ -200,7 +200,7 @@ func buildTree(blocks [][]byte, key string, rounds int) []byte {
 func MD6FromFile(filePath *C.char, key *C.char, outputLength C.int) *C.char {
 	goFilePath := C.GoString(filePath)
 	goKey := C.GoString(key)
-	rounds := 40 + int(math.Floor(float64(outputLength*16)/4))
+	rounds := 40 + int(math.Floor(float64(32*16)/4))
 	data, err := ioutil.ReadFile(goFilePath)
 	if err != nil {
 		fmt.Println("Ошибка чтения файла:", err)
@@ -222,7 +222,7 @@ func MD6FromFile(filePath *C.char, key *C.char, outputLength C.int) *C.char {
 func MD6FromInput(inputData *C.char, key *C.char, outputLength C.int) *C.char {
 	goInputData := C.GoString(inputData)
 	goKey := C.GoString(key)
-	rounds := 40 + int(math.Floor(float64(outputLength*16)/4))
+	rounds := 40 + int(math.Floor(float64(32*16)/4))
 	data := []byte(goInputData)
 	blocks := splitIntoBlocks(data, MD6BlockSize)
 

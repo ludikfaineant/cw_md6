@@ -19,7 +19,6 @@ from PyQt5.QtWidgets import (
     QFormLayout,
 )
 from PyQt5.QtCore import Qt
-import re
 import random
 import string
 import fitz
@@ -79,7 +78,7 @@ class KeySettingsDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("Key Settings")
-        self.setGeometry(300, 300, 400, 250)
+        self.setGeometry(300, 300, 300, 250)
 
         self.key_min_length_input = QLineEdit(str(key_min_length))
 
@@ -93,6 +92,11 @@ class KeySettingsDialog(QDialog):
         self.exclude_special_checkbox = QCheckBox("Exclude Special Characters", self)
         self.exclude_special_checkbox.setChecked(exclude_special)
 
+        # QLabel для отображения доступных символов
+        self.special_characters_label = QLabel(
+            "Special Characters: !#$%&'*+/=?^_`{|}~@", self
+        )
+
         self.save_button = QPushButton("Save", self)
         self.cancel_button = QPushButton("Cancel", self)
 
@@ -105,6 +109,7 @@ class KeySettingsDialog(QDialog):
         form_layout.addRow(self.exclude_lower_checkbox)
         form_layout.addRow(self.exclude_upper_checkbox)
         form_layout.addRow(self.exclude_special_checkbox)
+        form_layout.addRow(self.special_characters_label)
         form_layout.addRow(self.save_button, self.cancel_button)
 
     def save_settings(self):
@@ -142,7 +147,7 @@ class HashComparerApp(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("MD6")
-        self.setGeometry(100, 100, 800, 550)
+        self.setGeometry(100, 100, 950, 550)
 
         self.create_menu()
 
@@ -322,7 +327,7 @@ class HashComparerApp(QMainWindow):
             return False
 
         # Проверка, если исключены специальные символы, то их не может быть в ключе
-        if self.exclude_special and any(c in "#!@$" for c in key):
+        if self.exclude_special and any(c in "!#$%&'*+/=?^_`{|}~@" for c in key):
             return False
 
         return True
@@ -331,7 +336,7 @@ class HashComparerApp(QMainWindow):
         """Генерация случайного ключа, соответствующего ограничениям."""
 
         # Стартовый набор символов (включает все символы)
-        characters = string.ascii_letters + string.digits + "#!@$"
+        characters = string.ascii_letters + string.digits + "!#$%&'*+/=?^_`{|}~@"
 
         # Исключаем символы в зависимости от флагов
         if self.exclude_digits:
@@ -341,7 +346,9 @@ class HashComparerApp(QMainWindow):
         if self.exclude_upper:
             characters = "".join([ch for ch in characters if not ch.isupper()])
         if self.exclude_special:
-            characters = "".join([ch for ch in characters if ch not in "#!@$"])
+            characters = "".join(
+                [ch for ch in characters if ch not in "!#$%&'*+/=?^_`{|}~@"]
+            )
 
         # Если после исключений пустой набор символов, то выводим ошибку
         if not characters:
@@ -475,7 +482,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.critical(self, "Error", "File not found!")
                     return
 
-                md6 = MD6Hash("./libmd6.so")
+                md6 = MD6Hash("./libmd6.dll")
                 result = md6.compute_md6_hash_from_file(
                     file_path.encode("utf-8"), key, 32
                 )
@@ -485,7 +492,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.warning(self, "Warning", "Input is empty!")
                     return
 
-                md6 = MD6Hash("./libmd6.so")
+                md6 = MD6Hash("./libmd6.dll")
                 result = md6.compute_md6_hash_from_input(data, key, 32)
 
             if result:
@@ -518,7 +525,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.critical(self, "Error", "File not found!")
                     return
 
-                md6 = MD6Hash("./libmd6.so")
+                md6 = MD6Hash("./libmd6.dll")
                 result = md6.compute_md6_hash_from_file(
                     file_path.encode("utf-8"), key, 32
                 )
@@ -528,7 +535,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.warning(self, "Warning", "Input is empty!")
                     return
 
-                md6 = MD6Hash("./libmd6.so")
+                md6 = MD6Hash("./libmd6.dll")
                 result = md6.compute_md6_hash_from_input(data, key, 32)
 
             if result.decode("utf-8") == self.computed_hash_var.text().strip():
@@ -548,7 +555,8 @@ class HashComparerApp(QMainWindow):
         QMessageBox.information(
             self,
             "About",
-            "MD6 Hash Comparer\n\nA simple tool to compare MD6 hashes of files.",
+            "Ларин Анатолий Николаевич А-18-21\n"
+            "Программная реализация функции хеширования MD6.",
         )
 
     def clear_manual_input(self):
