@@ -90,6 +90,23 @@ func rotateLeft(value uint64, shift uint) uint64 {
 	return (value << shift) | (value >> (64 - shift))
 }
 
+// Преобразование ключа в 8 слов (64 байта), если ключ короче, добавляем паддинг
+func prepareKey(key []byte) []uint64 {
+	// Если ключ меньше 64 байт (8 слов), добавляем паддинг
+	if len(key) < 64 {
+		paddedKey := append(key, make([]byte, 64-len(key))...) // Паддинг нулями
+		key = paddedKey
+	}
+
+	// Разбиваем на 8 слов (64 бита)
+	K := make([]uint64, 8)
+	for i := 0; i < 8; i++ {
+		K[i] = binary.LittleEndian.Uint64(key[i*8 : (i+1)*8])
+	}
+
+	return K
+}
+
 func compressF(block []byte, key string, rounds int) []byte {
 	n := 89                // Количество фиксированных слов
 	c := 16                // Размер блока вывода
@@ -102,10 +119,8 @@ func compressF(block []byte, key string, rounds int) []byte {
 	copy(A[:len(Q)], Q)
 
 	// 2. Заполнение A значениями из ключа K
-	K := make([]uint64, len(key)/8)
-	for i := 0; i < len(K); i++ {
-		K[i] = binary.LittleEndian.Uint64([]byte(key)[i*8 : (i+1)*8])
-	}
+	keyBytes := []byte(key)
+	K := prepareKey(keyBytes) // Преобразуем байты в 8 слов (64 байта)
 	copy(A[len(Q):len(Q)+len(K)], K)
 
 	// 3. Заполнение значениями U и V

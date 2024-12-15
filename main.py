@@ -311,7 +311,7 @@ class HashComparerApp(QMainWindow):
         """Проверка валидности ключа по установленным ограничениям."""
 
         # Проверка минимальной длины
-        if len(key) < self.key_min_length and len(key) > 64:
+        if len(key) < self.key_min_length or len(key) > 64:
             return False
 
         # Проверка, если исключены цифры, то они не могут быть в ключе
@@ -482,7 +482,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.critical(self, "Error", "File not found!")
                     return
 
-                md6 = MD6Hash("./libmd6.dll")
+                md6 = MD6Hash("./libmd6.so")
                 result = md6.compute_md6_hash_from_file(
                     file_path.encode("utf-8"), key, 32
                 )
@@ -492,7 +492,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.warning(self, "Warning", "Input is empty!")
                     return
 
-                md6 = MD6Hash("./libmd6.dll")
+                md6 = MD6Hash("./libmd6.so")
                 result = md6.compute_md6_hash_from_input(data, key, 32)
 
             if result:
@@ -525,7 +525,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.critical(self, "Error", "File not found!")
                     return
 
-                md6 = MD6Hash("./libmd6.dll")
+                md6 = MD6Hash("./libmd6.so")
                 result = md6.compute_md6_hash_from_file(
                     file_path.encode("utf-8"), key, 32
                 )
@@ -535,7 +535,7 @@ class HashComparerApp(QMainWindow):
                     QMessageBox.warning(self, "Warning", "Input is empty!")
                     return
 
-                md6 = MD6Hash("./libmd6.dll")
+                md6 = MD6Hash("./libmd6.so")
                 result = md6.compute_md6_hash_from_input(data, key, 32)
 
             if result.decode("utf-8") == self.computed_hash_var.text().strip():
